@@ -4,6 +4,8 @@ import weakref
 import pandas as pd
 import numpy as np
 import pystac
+import stackstac
+
 
 @pd.api.extensions.register_extension_dtype
 class STACDtype(pd.api.extensions.ExtensionDtype):
@@ -74,7 +76,7 @@ class ItemArray(pd.api.extensions.ExtensionArray):
         return 8  # TODO: use to_dict()?
     
     def isna(self):
-        return np.zeros(len(self), dtype=False)
+        return np.zeros(len(self), dtype=bool)
     
     def copy(self):
         return type(self)(self._items)
@@ -110,3 +112,30 @@ class ItemArray(pd.api.extensions.ExtensionArray):
     @property
     def stac_extensions(self):
         return pd.array(self._apply(operator.attrgetter("stac_extensions")))
+
+
+@pd.api.extensions.register_series_accessor("stac")
+# @pd.api.extensions.register_dataframe_accessor("stac")
+class RasterAccessor:
+    def __init__(self, pandas_obj):
+        self._series = pandas_obj
+
+    @property
+    def asset_names(self):
+        # Are we assuming assets are uniform? Taking the union? ...
+        return list(self._series.array._items[0].assets)
+
+    def with_rasters(self, assets=None):
+        from .raster_array import RasterArray
+
+        series = []
+        assets = assets or self.asset_names
+
+        for asset in assets:
+            ra = RasterArray([
+                stackstac.stack(item, assets=[asset], chunksize=-1).squeeze() for item in self._series.array._items
+            ])
+            series.append(pd.Series(ra, index=self._series.index, name=asset))
+
+        df = pd.concat(series, axis="columns")
+        return pd.concat([self._series, df], axis="columns")

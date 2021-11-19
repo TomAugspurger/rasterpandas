@@ -101,6 +101,7 @@ class RasterAccessor:
         red = self._df[red]
         nir, red = nir.align(red)
         # TODO: mask with NA
+        # breakpoint()
         return pd.Series(
             RasterArray(
                 xrspatial.ndvi(nir_agg, red_agg)
