@@ -1,66 +1,95 @@
+from __future__ import annotations
+
 from typing import List
 from pandas.core.algorithms import isin
 
 import xarray as xr
+import xrspatial
 import pandas as pd
 import numpy as np
 
 
 @pd.api.extensions.register_extension_dtype
 class RasterDtype(pd.api.extensions.ExtensionDtype):
-    name : str = "raster"
+    name: str = "raster"
 
     @property
     def type(self) -> type:
         return xr.DataArray
-    
+
     @classmethod
-    def construct_array_type() -> type:
+    def construct_array_type(cls) -> type:
         return RasterArray
+
+    @property
+    def na_value(self):
+        return pd.NA
 
 
 class RasterArray(pd.api.extensions.ExtensionArray):
+    """
+    A pandas ExtensionArray for storing raster imagery.
+
+    Each element of the array is a 2-d DataArray.
+    """
+
     # TODO: look at how rasterframes handles rasters.
     # Seems like they have a struct with "context" (extent, crs) and the data
 
-    def __init__(self, items: List[xr.DataArray]):
+    def __init__(self, items: List[xr.DataArray | pd.NA]):
         items = list(items)
         self._items = items
         self._dtype = RasterDtype()
-    
+
     @property
     def dtype(self) -> RasterDtype:
         return self._dtype
-        
+
     @classmethod
     def _from_sequence(cls, scalars: List[xr.DataArray], *, dtype=None, copy=False):
         # TODO: dtype, copy
         return cls(scalars)
-    
+
     @classmethod
     def _from_factorized(cls, values, original):
         raise NotImplementedError
-        
+
     def __getitem__(self, key):
         if np.isscalar(key):
             return self._items[key]
-        else:
+        elif isinstance(key, slice):
             return type(self)(self._items[key])
-    
+        else:
+            return type(self)([self._items[k] for k in key])
+
+    def take(self, indices, allow_fill=False, fill_value=None):
+        if np.max(indices) > len(self):
+            raise IndexError()
+        elif allow_fill and np.min(indices) < -1:
+            raise ValueError()
+
+        values = []
+        for idx in indices:
+            if allow_fill and idx == -1:
+                values.append(fill_value)
+            else:
+                values.append(self[idx])
+        return type(self)(values)
+
     def __len__(self):
         return len(self._items)
-    
+
     def __eq__(self, other):
         if type(self) == type(other):
-            return self._items  == other.items
+            return self._items == other.items
         return NotImplemented
 
     def nbytes(self):
         return sum(item.nbytes for item in self._items)
-    
+
     def isna(self):
-        return np.zeros(len(self), dtype=False)
-    
+        return pd.array([x is pd.NA for x in self._items], dtype=pd.BooleanDtype())
+
     def copy(self):
         return type(self)(self._items)
 
@@ -78,14 +107,10 @@ class RasterArray(pd.api.extensions.ExtensionArray):
     # helpers
     def apply(self, f, *args, **kwargs):
         # what kind of alignment do we expect?
-        return type(self)([
-            f(item, *args, **kwargs) for item in self._items
-        ])
+        return type(self)([f(item, *args, **kwargs) for item in self._items])
 
     def _format_array(self, *args, **kwargs):
-        return [
-            repr(item) for item in self._items
-        ]
+        return [repr(item) for item in self._items]
 
 
 @pd.api.extensions.register_dataframe_accessor("raster")
@@ -94,20 +119,16 @@ class RasterAccessor:
         self._df = pandas_obj
 
     def ndvi(self, nir=None, red=None):
-        import xrspatial
-
         # TODO: standard name handling; default to eo:common_name, string looks up from self
         nir = self._df[nir]
         red = self._df[red]
         nir, red = nir.align(red)
-        # TODO: mask with NA
-        # breakpoint()
         return pd.Series(
             RasterArray(
                 xrspatial.ndvi(nir_agg, red_agg)
                 for nir_agg, red_agg in zip(nir.tolist(), red.tolist())
             ),
-            name="ndvi"
+            name="ndvi",
         )
 
 
