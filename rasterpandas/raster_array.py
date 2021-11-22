@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Callable
 from pandas.core.algorithms import isin
 
 import xarray as xr
@@ -38,7 +38,7 @@ class RasterArray(pd.api.extensions.ExtensionArray):
 
     def __init__(self, items: List[xr.DataArray | pd.NA]):
         items = list(items)
-        self._items = items
+        self._data = items
         self._dtype = RasterDtype()
 
     @property
@@ -56,11 +56,11 @@ class RasterArray(pd.api.extensions.ExtensionArray):
 
     def __getitem__(self, key):
         if np.isscalar(key):
-            return self._items[key]
+            return self._data[key]
         elif isinstance(key, slice):
-            return type(self)(self._items[key])
+            return type(self)(self._data[key])
         else:
-            return type(self)([self._items[k] for k in key])
+            return type(self)([self._data[k] for k in key])
 
     def take(self, indices, allow_fill=False, fill_value=None):
         if np.max(indices) > len(self):
@@ -77,27 +77,27 @@ class RasterArray(pd.api.extensions.ExtensionArray):
         return type(self)(values)
 
     def __len__(self):
-        return len(self._items)
+        return len(self._data)
 
     def __eq__(self, other):
         if type(self) == type(other):
-            return self._items == other.items
+            return self._data == other.items
         return NotImplemented
 
     def nbytes(self):
-        return sum(item.nbytes for item in self._items)
+        return sum(item.nbytes for item in self._data)
 
     def isna(self):
-        return pd.array([x is pd.NA for x in self._items], dtype=pd.BooleanDtype())
+        return pd.array([x is pd.NA for x in self._data], dtype=pd.BooleanDtype())
 
     def copy(self):
-        return type(self)(self._items)
+        return type(self)(self._data)
 
     @classmethod
     def _concat_same_type(cls, to_concat):
         items = []
         for arr in to_concat:
-            items.extend(arr._items)
+            items.extend(arr._data)
         return cls(items)
 
     def _formatter(self, boxed=False):
@@ -105,16 +105,16 @@ class RasterArray(pd.api.extensions.ExtensionArray):
 
     #  ----------
     # helpers
-    def apply(self, f, *args, **kwargs):
+    def _apply(self, f, *args, **kwargs):
         # what kind of alignment do we expect?
-        return type(self)([f(item, *args, **kwargs) for item in self._items])
+        return type(self)([f(item, *args, **kwargs) for item in self._data])
 
     def _format_array(self, *args, **kwargs):
-        return [repr(item) for item in self._items]
+        return [repr(item) for item in self._data]
 
 
 @pd.api.extensions.register_dataframe_accessor("raster")
-class RasterAccessor:
+class DataFrameRasterAccessor:
     def __init__(self, pandas_obj):
         self._df = pandas_obj
 
@@ -130,6 +130,22 @@ class RasterAccessor:
             ),
             name="ndvi",
         )
+
+
+@pd.api.extensions.register_series_accessor("raster")
+class SeriesRasterAccessor:
+    def __init__(self, pandas_obj):
+        self._series = pandas_obj
+
+    def apply(self, f: Callable, *args, **kwargs):
+        name = f.__name__
+
+        result = pd.Series(
+            RasterArray([
+                f(item) for item in self._series.tolist()
+            ]),
+        index=self._series.index, name=name)
+        return result
 
 
 class AssetGetter:
